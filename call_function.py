@@ -19,7 +19,7 @@ def call_functions_from_llm_response(response: types.GenerateContentResponse) ->
     for function_call in response.function_calls:
         # Log function call (but skip detailed logging for terminal commands since they show their own output)
         if function_call.name != "run_command_in_terminal":
-            logger.info(f"[bold blue]→ Calling:[/bold blue] {function_call.name}")
+            logger.info(f"[bold blue]→ Calling:[/bold blue] {function_call.name} with args {function_call.args}")
 
         call_function_response = call_function(function_call)
 

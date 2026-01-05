@@ -7,7 +7,6 @@ import pexpect
 from google.genai import types
 
 from .terminal_ui import (
-    console,
     print_command_error,
     print_command_output,
     print_command_start,
@@ -147,7 +146,7 @@ class PexpectTerminal:
         exit_code = 0
 
         try:
-            exit_code_match = re.search(r"^.*code:(\d+).*$", exit_code_output)
+            exit_code_match = re.search(r"code:(\d+)", exit_code_output, re.MULTILINE)
             if exit_code_match:
                 exit_code = int(exit_code_match.group(1))
         except (ValueError, AttributeError):
@@ -169,16 +168,6 @@ class PexpectTerminal:
         }
 
     def _clean_output(self, output: str, command: str) -> str:
-        """
-        Clean up command output by removing the echoed command and extra whitespace.
-
-        Args:
-            output: Raw output from the terminal
-            command: The command that was executed
-
-        Returns:
-            Cleaned output string
-        """
         lines = output.split("\n")
 
         # Remove the first line if it's the echoed command
@@ -210,16 +199,6 @@ terminal = PexpectTerminal()
 
 
 def run_command_in_terminal(working_directory: str, command_line_args: list[str]) -> str:
-    """
-    Execute a command in the terminal with real-time output streaming.
-
-    Args:
-        working_directory: The directory to execute the command in
-        command_line_args: List of command arguments to execute
-
-    Returns:
-        A formatted string with the command result
-    """
     try:
         # Ensure terminal is open
         if not terminal.is_alive():
@@ -234,9 +213,9 @@ def run_command_in_terminal(working_directory: str, command_line_args: list[str]
         else:
             error_msg = result.get("error", "")
             if error_msg:
-                return f"COMMAND FAILED (exit code: {result['exit_code']})\n\nError: {error_msg}\n\nOutput:\n{result['stdout']}"
-            return f"COMMAND FAILED (exit code: {result['exit_code']})\n\nOutput:\n{result['stdout']}"
-
+                raise RuntimeError(
+                    f"Command failed with exit code {result['exit_code']}: {error_msg}\n\nOutput:\n{result['stdout']}"
+                )
+            raise RuntimeError(f"Command failed with exit code {result['exit_code']}\n\nOutput:\n{result['stdout']}")
     except Exception as error:
-        console.print(f"[red]Terminal error: {error}[/red]")
         return f"Error: {error}"
