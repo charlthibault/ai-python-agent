@@ -171,4 +171,8 @@ uv run main.py "Your test prompt"
 
 ---
 
+## Credits
+
+This project was built following [Build an AI Agent with Python](https://www.boot.dev/courses/build-ai-agent-python) course from Boot.dev.
+
 **Educational project demonstrating AI agent development with Google Gemini**
