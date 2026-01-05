@@ -1,5 +1,3 @@
-import logging
-
 from google.genai import types
 
 from config import WORKING_DIRECTORY
@@ -17,8 +15,12 @@ function_map = {
 
 def call_functions_from_llm_response(response: types.GenerateContentResponse) -> list[types.Part]:
     function_results = []
+
     for function_call in response.function_calls:
-        logger.info(f"Calling function: {function_call.name}({function_call.args})")
+        # Log function call (but skip detailed logging for terminal commands since they show their own output)
+        if function_call.name != "run_command_in_terminal":
+            logger.info(f"[bold blue]→ Calling:[/bold blue] {function_call.name}")
+
         call_function_response = call_function(function_call)
 
         if not call_function_response.parts:
@@ -33,17 +35,17 @@ def call_functions_from_llm_response(response: types.GenerateContentResponse) ->
                 )
             )
         )
-        logger.debug(f"-> {call_function_response.parts[0].function_response.response}")
+
+        # Only log debug output for non-terminal functions (terminal already showed output)
+        if function_call.name != "run_command_in_terminal":
+            logger.debug(
+                f"  [dim]Result: {str(call_function_response.parts[0].function_response.response['result'])[:200]}...[/dim]"
+            )
 
     return function_results
 
 
 def call_function(function_call: types.FunctionCall) -> types.Content:
-    if logger.getEffectiveLevel() == logging.WARNING:
-        logger.warning(f"Calling function: {function_call.name}({function_call.args})")
-    else:
-        logger.info(f" - Calling function: {function_call.name}")
-
     function_name = function_call.name or ""
 
     function_to_call = function_map.get(function_name)
