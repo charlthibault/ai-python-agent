@@ -9,6 +9,7 @@ An autonomous AI coding agent powered by Google's Gemini 2.5 Pro that performs c
 - **Code Execution**: Run Python scripts and shell commands
 - **Security Sandboxing**: All operations restricted to working directory
 - **Function Calling**: Native integration with Gemini's function calling API
+ - **Real-Time Terminal Output**: See command execution progress with rich UI formatting
 
 ## Quick Start
 
@@ -66,6 +67,30 @@ The agent has access to 5 tools:
 3. **`write_file(file_path, content)`** - Create or overwrite files
 4. **`run_python_file(file_path, args)`** - Execute Python scripts
 5. **`run_command_in_terminal(command)`** - Run shell commands
+
+## Terminal Output
+
+When the agent executes shell commands, you'll see real-time output with rich formatting:
+
+```
+╭──────────────────────────────────────────────────────────╮
+│ ▶ Running: make test                                      │
+╰──────────────────────────────────────────────────────────╯
+
+Running tests...
+test_calculator.py::test_add PASSED
+test_calculator.py::test_subtract PASSED
+...
+
+╭──────────────────────────────────────────────────────────╮
+│ ✓ Command completed (exit code: 0) in 2.3s               │
+╰──────────────────────────────────────────────────────────╯
+```
+
+This provides:
+- **Real-time streaming**: See output as it happens, not after completion
+- **Visual separation**: Clear boundaries between agent reasoning and command execution
+- **Status indicators**: Green ✓ for success, red ✗ for errors, yellow ⏱ for timeouts
 
 ## Project Structure
 

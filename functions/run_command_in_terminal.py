@@ -1,7 +1,19 @@
+import os
+import re
+import sys
 import time
 
 import pexpect
 from google.genai import types
+
+from .terminal_ui import (
+    console,
+    print_command_error,
+    print_command_output,
+    print_command_start,
+    print_command_success,
+    print_command_timeout,
+)
 
 schema_run_command_in_terminal = types.FunctionDeclaration(
     name="run_command_in_terminal",
@@ -20,101 +32,211 @@ schema_run_command_in_terminal = types.FunctionDeclaration(
 
 
 class PexpectTerminal:
+    """
+    A persistent terminal session using pexpect for command execution.
+
+    Supports real-time output streaming with rich terminal UI formatting.
+    """
+
+    # Custom prompt that's easy to detect. Use a unique, exact string so
+    # we can rely on `expect_exact` instead of a regex which can match
+    # normal command output inadvertently.
+    PROMPT = "PEXPECT_PROMPT_END__> "
+
     def __init__(self):
         self.child = None
-        # Support multiple common terminal prompts
-        self.prompt_pattern = r"❯|➜|\$|\#|>>>|> "
 
-    def open(self, working_directory="/tmp"):
-        """Open a bash shell with pexpect control"""
-        # Spawn bash with pexpect
-        self.child = pexpect.spawn("/bin/bash", encoding="utf-8", echo=False)
+    def open(self, working_directory: str = "/tmp") -> None:
+        self.child = pexpect.spawn(
+            "/bin/bash",
+            args=["--norc", "--noprofile"],
+            encoding="utf-8",
+            echo=False,
+        )
 
-        # Set a simple, recognizable prompt
-        self.child.sendline('export PS1="PEXPECT$ "')
-        time.sleep(0.2)
-        self._wait_for_prompt()
+        if os.getenv("PEXPECT_DEBUG"):
+            self.child.logfile_read = sys.stdout
 
-        # Change to working directory
+        self.child.sendline(f"export PS1='{self.PROMPT}'")
+        time.sleep(0.3)
+        self._consume_until_prompt(timeout=5)
+
         self.child.sendline(f"cd {working_directory}")
-        self._wait_for_prompt()
+        self._consume_until_prompt(timeout=5)
 
-    def _wait_for_prompt(self, timeout=10):
-        """Wait for the shell prompt"""
+    def _consume_until_prompt(self, timeout: float = 10) -> str:
+        buffer = ""
         try:
-            self.child.expect(self.prompt_pattern, timeout=timeout)
+            self.child.expect_exact([self.PROMPT, pexpect.EOF], timeout=timeout)
+            output = self.child.before or ""
+            if output.endswith(self.PROMPT):
+                output = output[: -len(self.PROMPT)]
+            return output
         except pexpect.TIMEOUT:
-            time.sleep(0.5)
+            try:
+                out = self.child.read_nonblocking(size=4096, timeout=0)
+                if out:
+                    buffer += out
+            except (pexpect.exceptions.TIMEOUT, EOFError, OSError):
+                pass
+            return buffer
+        except pexpect.EOF:
+            try:
+                out = self.child.read_nonblocking(size=4096, timeout=0)
+                if out:
+                    buffer += out
+            except Exception:
+                pass
+            return buffer
 
-    def run_command(self, command, timeout=30):
-        """
-        Send command and capture output.
+    def run_command(self, command: str, timeout: float = 30) -> dict:
+        start_time = time.time()
 
-        Args:
-            command: The command to run
-            timeout: Timeout in seconds
+        print_command_start(command)
 
-        Returns:
-            Dictionary with stdout, stderr, and exit_code
-        """
-        # Run command and capture exit code
         self.child.sendline(command)
 
-        # Wait for command to complete
-        try:
-            self._wait_for_prompt(timeout=timeout)
-            output = self.child.before
+        buffer = ""
+        prompt_detected = False
 
-            # Get the exit code of the last command
-            self.child.sendline("echo $?")
-            self._wait_for_prompt()
-            exit_code_output = self.child.before.strip()
+        patterns = [self.PROMPT, pexpect.EOF]
 
-            # Extract exit code (first line after the command)
-            exit_code = 0
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             try:
-                exit_code = int(exit_code_output.split("\n")[0].strip())
-            except (ValueError, IndexError, AttributeError):
-                exit_code = 0
+                self.child.expect_exact(patterns, timeout=0.5)
+                out = self.child.before or ""
+                if out:
+                    buffer += out
+                    print_command_output(out)
 
-            return {"stdout": output.strip(), "exit_code": exit_code, "success": exit_code == 0}
-        except pexpect.TIMEOUT:
-            return {"stdout": "", "exit_code": -1, "success": False, "error": "Command timed out"}
+                prompt_detected = True
+                break
 
-    def expect(self, pattern, timeout=30):
-        """Wait for a specific pattern in output"""
-        return self.child.expect(pattern, timeout=timeout)
+            except pexpect.TIMEOUT:
+                try:
+                    out = self.child.read_nonblocking(size=4096, timeout=0)
+                    if out:
+                        buffer += out
+                        print_command_output(out)
+                except (pexpect.exceptions.TIMEOUT, EOFError, OSError):
+                    pass
+            except pexpect.EOF:
+                try:
+                    out = self.child.read_nonblocking(size=4096, timeout=0)
+                    if out:
+                        buffer += out
+                        print_command_output(out)
+                except Exception:
+                    pass
+                break
 
-    def is_alive(self):
-        """Check if the terminal session is still active"""
-        return self.child and self.child.isalive()
+        execution_time = time.time() - start_time
 
-    def close(self):
-        """Close the terminal session"""
+        if not prompt_detected:
+            print_command_timeout()
+            return {
+                "stdout": buffer.strip(),
+                "exit_code": -1,
+                "success": False,
+                "error": f"Command timed out after {timeout} seconds",
+            }
+
+        self.child.sendline("echo code:$?")
+        exit_code_output = self._consume_until_prompt(timeout=5)
+        exit_code = 0
+
+        try:
+            exit_code_match = re.search(r"^.*code:(\d+).*$", exit_code_output)
+            if exit_code_match:
+                exit_code = int(exit_code_match.group(1))
+        except (ValueError, AttributeError):
+            exit_code = 0
+
+        # Clean up the output
+        output = self._clean_output(buffer, command)
+
+        # Display completion status
+        if exit_code == 0:
+            print_command_success(exit_code, execution_time)
+        else:
+            print_command_error(exit_code)
+
+        return {
+            "stdout": output,
+            "exit_code": exit_code,
+            "success": exit_code == 0,
+        }
+
+    def _clean_output(self, output: str, command: str) -> str:
+        """
+        Clean up command output by removing the echoed command and extra whitespace.
+
+        Args:
+            output: Raw output from the terminal
+            command: The command that was executed
+
+        Returns:
+            Cleaned output string
+        """
+        lines = output.split("\n")
+
+        # Remove the first line if it's the echoed command
+        if lines and command in lines[0]:
+            lines = lines[1:]
+
+        # Remove empty lines at start and end
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        while lines and not lines[-1].strip():
+            lines.pop()
+
+        return "\n".join(lines)
+
+    def is_alive(self) -> bool:
+        """Check if the terminal session is still active."""
+        return self.child is not None and self.child.isalive()
+
+    def close(self) -> None:
+        """Close the terminal session gracefully."""
         if self.child and self.child.isalive():
             self.child.sendline("exit")
             time.sleep(0.2)
             self.child.close()
 
 
-# Global terminal instance
+# Global terminal instance for persistent sessions
 terminal = PexpectTerminal()
 
 
-def run_command_in_terminal(working_directory: str, command_line_args: list[str]):
+def run_command_in_terminal(working_directory: str, command_line_args: list[str]) -> str:
+    """
+    Execute a command in the terminal with real-time output streaming.
+
+    Args:
+        working_directory: The directory to execute the command in
+        command_line_args: List of command arguments to execute
+
+    Returns:
+        A formatted string with the command result
+    """
     try:
         # Ensure terminal is open
         if not terminal.is_alive():
             terminal.open(working_directory)
 
-        # Run the command
+        # Join args into command string
         command = " ".join(command_line_args)
         result = terminal.run_command(command)
 
         if result["success"]:
             return f"COMMAND EXECUTED SUCCESSFULLY\n\nOutput:\n{result['stdout']}"
         else:
+            error_msg = result.get("error", "")
+            if error_msg:
+                return f"COMMAND FAILED (exit code: {result['exit_code']})\n\nError: {error_msg}\n\nOutput:\n{result['stdout']}"
             return f"COMMAND FAILED (exit code: {result['exit_code']})\n\nOutput:\n{result['stdout']}"
 
     except Exception as error:
+        console.print(f"[red]Terminal error: {error}[/red]")
         return f"Error: {error}"

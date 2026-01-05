@@ -9,5 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
+# coverage
+.coverage
+coverage.lcov
+
 # ignore env file
 .env
